@@ -1,0 +1,302 @@
+################################################################################
+# OS Install
+################################################################################
+Install:
+	lang: English
+	country: other->Europe->Portugal
+	local: en_US.UTF-8
+	keymap: American English
+
+Network:
+	hostname: fporto42
+	domain: mini.42
+Users:
+	root:
+		pass: Quarentae2
+	user:
+		name: fporto
+		pass: Quarentae2
+Clock:
+	time zone: Lisbon
+Partition:
+	manual:
+		create new partition:
+			size: 500 MB (resized)
+			type: primary
+			location: beginning
+			fs: ext4
+			mount point: /boot
+			label: boot
+			bootable: yes
+		create new partition:
+			size: max
+			type: logical
+			fs: do not use
+		cofigure encrypted volumes:
+			create encrypted volume:
+				device to encrypt: sda5 (partition previously created with max size)
+					default setting
+					data erased
+					passphrase: Quarentae2
+		configure LVM:
+			create group:
+				name: LVMGroup
+				device: sda5_crypt (encrypted partition)
+			create logical volume:
+				LVMGroup:
+					name: root
+					size: 10G
+			create logical volume:
+				LVMGroup:
+					name: home
+					size: 8G
+			create logical volume:
+				LVMGroup:
+					name: var
+					size: 3G
+			create logical volume:
+				LVMGroup:
+					name: srv
+					size: 3G
+			create logical volume:
+				LVMGroup:
+					name: tmp
+					size: 3G
+			create logical volume:
+				LVMGroup:
+					name: var-log
+					size: 4G
+			create logical volume:
+				LVMGroup:
+					name: swap
+					size: max (2.8G)
+		edit lvm partitions:
+			fs:
+				swap: swap
+				others: ext4
+			mount point:
+				root: /
+				home: /home
+				var: /var
+				srv: /srv
+				tmp: /tmp
+				var-log: /var/log
+			label:
+				root: root
+				home: home
+				var: var
+				srv: srv
+				tmp: tmp
+				var-log: var-log
+Package manager:
+	scan cd: no
+	mirror country: PT
+		mirror: deb.debian.org
+	proxy: none
+	servey: no
+	software: none
+Bootloader:
+	grub: install
+		device to boot from: /dev/sda (manual select)
+################################################################################
+# Config
+################################################################################
+Login as root
+Initial setup:
+	Misc:
+		apt install man
+	Users:
+		groupadd user42
+		usermod -a -G user42 fporto
+		usermod -a -G sudo fporto
+	Sudo:	
+		apt install sudo
+		mkdir /var/log/sudo
+		visudo
+			Edited:
+				Defaults	secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+				-> Defaults	secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+			Added:
+				Defaults	passwd_tries=3
+				Defaults	badpass_message="You entered the wrong pass! Try again."
+				Defaults	logfile="/var/log/sudo/sudo.log"
+				Defaults	log_input,log_output
+				Defaults	iolog_dir="/var/log/sudo/io"
+				Defaults	requiretty
+	Ssh:
+		apt install openssh-server
+		nano /etc/ssh/sshd_config
+			Added:
+				Port 4242
+				PermitRootLogin no
+				X11Forwarding no
+	Ufw:
+		apt install ufw
+		ufw allow 4242/tcp
+		ufw enable
+	Password:
+		nano /etc/login.defs
+			Edited:
+				PASS_MAX_DAYS 30
+				PASS_MIN_DAYS 2
+				PASS_WARN_AGE 7
+		chage -m 2 fporto
+		chage -m 2 root
+		chage -M 30 fporto
+		chage -M 30 root
+		chage -W 7 fporto
+		chage -W 7 root
+		apt install libpam-pwquality
+		nano /etc/pam.d/common-password
+			Edited:
+				password	requisite	pam_pwquality.so retry=3
+				-> password	requisite	pam_pwquality.so retry=3 ucredit=-1 dcredit=-1 difok=7 maxrepeat=3 minlen=10 remember=1 usercheck=1 enforcing=1 enforcing_for_root=1
+	Monitoring:
+		apt install bc
+			script:
+				TEMP="/tmp/.monitoring"
+				echo -e "#Architecture: $(uname -a)" > $TEMP
+				echo "#CPU physical: $(lscpu | grep "^Socket(s):" | awk '{print $2}')"
+				echo "#vCPU: $(grep processor /proc/cpuinfo | wc -l)"
+				memAvailable="$(grep MemAvailable /proc/meminfo | awk '{print int(($2 + 512) / 1000)}')"
+				memTotal="$(grep MemTotal /proc/meminfo | awk '{print int(($2 + 512) / 1000)}')MB"
+				echo "#Memory(Available-Used): $memAvailable/$memTotal ($(ps -A -o pmem | tail -n+2 | paste -sd+ | bc)%)"
+				echo "#Disk Usage: $(df --total -BM | grep total | awk '{printf "%.1f/%.1fGB (%.1f%%)", ($3 / 1000000), ($4 / 1000000), $5}')"
+				echo "#CPU load: $(ps -A -o pmem | tail -n+2 | paste -sd+ | bc)"
+				echo "#Last boot: $(who -b | awk '{print $3" "$4}')"
+				echo "#LVM use: $(grep "/dev/mapper" /etc/fstab | awk 'END {if ($1) print "yes"; else print "no";}')"
+				echo "#Connections (TCP):  $(ss -s | grep "TCP:" | awk -F ' ' '{print $4}' | cut -d ',' -f1) established"
+				echo "#User count:  $(w | grep "user" |awk -F ',  ' '{print $2}' | awk '{print $1}')"
+				echo "#Network: IPv4 $(hostname -I)| MAC $(cat /sys/class/net/enp0s3/address)"
+				echo "#Sudo count: $(cat /var/log/sudo/sudo.log | grep "COMMAND" | wc -l)"
+			chmod +x /root/monitoring.sh
+			crontab -e
+		Added:
+			*/10 * * * * /root/monitoring.sh
+################################################################################
+# Bonus
+################################################################################
+wordpress:
+	apt install mariadb-server
+	apt install lighttpd
+	ufw allow 80/tcp
+	apt install php7.3-cgi php7.3-mysql
+	MariaDB:
+		mysql -u root -p
+			CREATE DATABASE wpdb;
+			CREATE USER 'fporto'@'localhost' IDENTIFIED BY 'Quarentae2';
+			GRANT ALL ON wpdb.* TO 'fporto'@'localhost' IDENTIFIED BY 'Quarentae2' WITH GRANT OPTION;
+			FLUSH PRIVILEGES;
+			EXIT;
+	Configs:
+		nano /etc/php/7.3/cgi/php.ini
+			Uncommented:
+				cgi.fix_pathinfo=1 <line 793>
+			Edited:
+				;date.timezone =
+				-> date.timezone = Europe/Lisbon <line 956>
+		nano /etc/lighttpd/lighttpd.conf
+			Edited:
+				server.document-root        = "/var/www/html"
+				-> server.document-root        = "/var/www/html/wordpress"
+			Added:
+				mod_rewrite, <list of modules at the top>
+		nano /etc/lighttpd/conf-available/15-fastcgi-php.conf
+			Edited:
+				"bin-path" => "/usr/bin/php-cgi"
+				-> "bin-path" => "/usr/bin/php-cgi7.3"
+		lighttpd-enable-mod fastcgi
+		lighttpd-enable-mod fastcgi-php
+		/etc/init.d/lighttpd force-reload
+	Wordpress:
+		apt install wget
+		wget -o /tmp/wordpress.tar.gz https://wordpress.org/latest.tar.gz
+		cd /var/www/html
+		tar -zxvf /tmp/wordpress.tar.gz
+		chown -R www-data:www-data wordpress/
+		chmod -R 755 wordpress/
+		cd wordpress
+		cp wp-config-sample.php wp-config.php
+		nano wp-config.php
+			Edited:
+				define( 'DB_NAME', 'database_name_here' );
+				-> define( 'DB_NAME', 'wpdb');
+				define( 'DB_USER', 'username_here' );
+				-> define( 'DB_USER', 'fporto' );
+				define( 'DB_USER', 'password_here' );
+				-> define( 'DB_PASSWORD', 'Quarentae2' );
+vsftpd:
+	apt install vsftpd
+	ufw allow 20/tcp
+	ufw allow 21/tcp
+	nano /etc/vsftpd.conf
+		Edited:
+			listen=NO
+			-> listen=YES
+			listen_ipv6=YES
+			-> listen_ipv6=NO
+		Uncommented:
+			write_enable=YES <line 31>
+			chroot_local_user=YES <line 122>
+		Added:
+			allow_writeable_chroot=YES
+			userlist_enable=YES
+			userlist_file=/etc/vsftpd.userlist
+			userlist_deny=NO
+	echo fporto >> /etc/vsftpd.userlist
+	systemctl restart vsftpd
+################################################################################
+# VM/IP Special
+################################################################################
+mariadb
+	\u wpdb
+	UPDATE wp_options SET option_value = "http://<current_ip>" WHERE option_id < 3;
+	COMMIT;
+################################################################################
+# EVAL
+################################################################################
+Simple setup:
+	systemctl status
+User:
+	(ask)uname -a
+	groups
+	sudo adduser fporto
+	(ask)cat /etc/login.defs
+	(ask)cat /etc/pam.d/common-password
+	sudo groupadd evaluating
+	sudo usermod -a -G evaluating fporto
+	groups fporto
+Hostname and partitions:
+	hostname
+	sudo hostnamectl set-hostname fporto42
+	shutdown -r now
+	hostname
+	(ask)lsblk
+	(ask)What is LVM?
+SUDO:
+	apt list --installed | grep sudo
+	(ask)sudo usermod -a -G sudo fporto
+	(ask)sudo visudo
+	sudo cat /var/log/sudo/sudo.log
+UFW:
+	apt list --installed | grep ufw
+	sudo systemctl status ufw
+	(ask)What is UFW?
+	sudo ufw status
+	sudo ufw allow 8080
+	sudo ufw status
+	(ask)sudo ufw delete allow 8080
+SSH:
+	apt list --installed | grep ssh
+	sudo systemctl status 4242
+	(ask)What is ssh?
+	nano /etc/ssh/sshd_config
+		Port 4242
+		PermitRootLogin no
+		X11Forwarding no
+Monitoring script:
+	nano .../monitoring.sh
+	(ask)What is cron?
+	crontab -e
+		(disable script)
+	shutdown -r now
